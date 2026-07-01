@@ -1,0 +1,2 @@
+run_id,model,config,n_scored,accuracy,brier,log_loss,notes
+20260629T165448Z,elo_baseline,"{""K"": 20.0, ""carry"": 0.75, ""home_adv"": 100.0, ""seasons"": [""2018-19"", ""2019-20"", ""2020-21"", ""2021-22"", ""2022-23"", ""2023-24"", ""2024-25""], ""warmup"": 1230}",2455,0.6363,0.2197,0.6284,Phase 0 measuring stick

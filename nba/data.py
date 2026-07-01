@@ -29,7 +29,10 @@ import time
 import numpy as np
 import pandas as pd
 
+from eval_log import log_run
+
 CACHE = "../data/interim/nba_games_cache.csv"
+ADV_CACHE = "../data/interim/nba_advanced_cache.csv"  # sibling cache; advanced stats stay OUT of the Elo games cache so the Elo path keeps eating ONLY results
 HOME_ADV = 100.0   # Elo points of home-court advantage (~60% home win rate)
 K = 20.0           # Elo update speed
 CARRY = 0.75       # season-to-season carryover (regress 25% toward the mean)
@@ -81,6 +84,91 @@ def load_games(seasons):
     df = fetch_games(seasons)
     df.to_csv(CACHE, index=False)
     print(f"Cached {len(df)} games to {CACHE}")
+    return df
+
+# --------------------------------------------------------------------------- #
+# 1b. ADVANCED STATS  (off/def rating + pace; own frame, own cache)            #
+# --------------------------------------------------------------------------- #
+def _find_col(df, name):
+    """Case-insensitively resolve `name` to a real column, else raise listing what
+    IS there. Why defensive: the advanced column names (OFF_RATING/DEF_RATING/PACE)
+    are INFERRED, not yet confirmed from a live pull -- so match loosely and fail
+    LOUD rather than silently grab the wrong column. (On the first live run, print
+    df.columns to confirm the real names.)"""
+    lowered = [c.lower() for c in df.columns]
+    # Guard the loose match: if two columns collide case-insensitively (e.g. PACE and
+    # pace after a concat), a last-writer-wins dict would silently pick one -- which
+    # defeats the whole "never grab the wrong column" purpose. Fail loud instead.
+    dupes = {c for c in lowered if lowered.count(c) > 1}
+    if dupes:
+        raise ValueError(f"ambiguous case-insensitive columns {dupes} in {list(df.columns)}")
+    lookup = {c.lower(): c for c in df.columns}
+    if name.lower() not in lookup:
+        raise ValueError(
+            f"expected column '{name}' not found; available columns: {list(df.columns)}")
+    return lookup[name.lower()]
+
+
+def _tidy_advanced(raw):
+    """Raw TeamGameLogs (Advanced) -> tidy LONG frame, one row per (team, game):
+    game_id, date, season, team, off_rating, def_rating, pace. Pure (no nba_api, no
+    network) so it is unit-testable offline, the same way _to_one_row_per_game is.
+
+    Note vs games: TeamGameLogs is ALREADY team-level (one row per team per game),
+    so there is NO home/away collapse here -- this is exactly the long shape the
+    feature pipeline rolls over. Every column goes through _find_col so a renamed
+    field surfaces as a clear ValueError instead of a silent wrong column."""
+    raw = raw.copy()
+    out = pd.DataFrame({
+        # Cast to int to MATCH the games cache: nba_api GAME_IDs are zero-padded strings
+        # ("0022200001"), but load_games' CSV round-trip reads game_id back as int64
+        # (22200001, zeros stripped). The feature pipeline joins advanced->games on
+        # game_id, so both sides must share one representation or the join silently
+        # finds zero matches. int is the common ground.
+        "game_id": raw[_find_col(raw, "GAME_ID")].astype("int64"),
+        "date": pd.to_datetime(raw[_find_col(raw, "GAME_DATE")]),
+        "season": raw[_find_col(raw, "SEASON_YEAR")],
+        "team": raw[_find_col(raw, "TEAM_ABBREVIATION")],   # = team identity, mirrors games' abbreviations
+        "off_rating": raw[_find_col(raw, "OFF_RATING")],
+        "def_rating": raw[_find_col(raw, "DEF_RATING")],
+        "pace": raw[_find_col(raw, "PACE")],
+    })
+    # sort by (team, date, game_id) -> already in the time order rolling features need
+    return out.sort_values(["team", "date", "game_id"]).reset_index(drop=True)
+
+
+def fetch_advanced(seasons, pause=0.6):
+    """Pull per-game ADVANCED team stats (off/def rating, pace) via nba_api. Lazy
+    import keeps the rest of the file testable without the package installed.
+    OMIT team_id so ALL teams come back in ONE call per season -- that is the whole
+    point: ~1 call/season instead of 30, far gentler on stats.nba.com."""
+    from nba_api.stats.endpoints import teamgamelogs
+    if not seasons:
+        raise ValueError("seasons list is empty")  # else pd.concat([]) raises an opaque error
+    frames = []
+    for season in seasons:
+        print(f"  pulling advanced {season} ...")
+        raw = teamgamelogs.TeamGameLogs(
+            season=season,
+            season_type_nullable="Regular Season",
+            # NOTE (verified via inspect.signature): TeamGameLogs really does reuse this
+            # *_player_game_logs_* kwarg name for its MeasureType param -- it is NOT a typo,
+            # do not "correct" it to *_team_game_logs_*. "Advanced" yields OFF/DEF_RATING+PACE.
+            measure_type_player_game_logs_nullable="Advanced",
+        ).get_data_frames()[0]
+        frames.append(raw)
+        time.sleep(pause)  # be polite to stats.nba.com, avoid rate limiting
+    return _tidy_advanced(pd.concat(frames, ignore_index=True))
+
+
+def load_advanced(seasons):
+    if os.path.exists(ADV_CACHE):
+        print(f"Loading cached advanced stats from {ADV_CACHE}")
+        return pd.read_csv(ADV_CACHE, parse_dates=["date"])
+    df = fetch_advanced(seasons)
+    os.makedirs(os.path.dirname(ADV_CACHE), exist_ok=True)  # don't lose a fresh API pull to a missing dir
+    df.to_csv(ADV_CACHE, index=False)
+    print(f"Cached {len(df)} advanced rows to {ADV_CACHE}")
     return df
 
 # --------------------------------------------------------------------------- #
@@ -198,6 +286,17 @@ def main():
     print("\nTop 5 teams by final Elo (sanity check):")
     for t, r in sorted(final_ratings.items(), key=lambda kv: -kv[1])[:5]:
         print(f"  {t}: {r:.0f}")
+
+    # Record this run in the experiment log (config + the 3 probability metrics).
+    logged = log_run(
+        model="elo_baseline",
+        config={"K": K, "home_adv": HOME_ADV, "carry": CARRY,
+                "warmup": args.warmup, "seasons": args.seasons},
+        n_scored=len(scored),
+        accuracy=accuracy(p, y), brier=brier(p, y), log_loss=log_loss(p, y),
+        notes="Phase 0 measuring stick",
+    )
+    print(f"\nLogged run {logged['run_id']} to eval log.")
 
     print("\nGO/NO-GO: if the checks above look sane and Elo beats the baselines,"
           "\nyou have a working measuring stick. Next: add features + a model (Week 3).")
