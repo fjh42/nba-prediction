@@ -149,7 +149,7 @@ def fetch_advanced(seasons, pause=0.6):
     for season in seasons:
         print(f"  pulling advanced {season} ...")
         raw = teamgamelogs.TeamGameLogs(
-            season=season,
+            season_nullable=season,   # TeamGameLogs uses *_nullable, unlike LeagueGameLog's `season`
             season_type_nullable="Regular Season",
             # NOTE (verified via inspect.signature): TeamGameLogs really does reuse this
             # *_player_game_logs_* kwarg name for its MeasureType param -- it is NOT a typo,

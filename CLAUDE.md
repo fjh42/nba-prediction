@@ -4,19 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Working agreement
 
-This is a **learn-first portfolio project** by Francisco (Cornell CS junior, targeting DS/AI-ML/FDE roles). The explicit anti-goal is "vibecoding" — shipping code he can't defend in an interview. He learns through **explanation, not authorship**: Claude writes the code; the *why* behind every design decision is what must land. Operate accordingly:
+This is a **learn-first portfolio project targeting DS/ML roles**. Code ships with its reasoning intact, never as a black box. Operate accordingly:
 
-- **Explain the *why* before the *how*.** Every design decision (why walk-forward, why `shift(1)`, why Brier) gets a one-line, interview-ready rationale alongside the code.
+- **Explain the *why* before the *how*.** Every design decision gets a one-line, interview-ready rationale alongside the code.
 - **Prefer raw implementations over frameworks in v1** (no LangChain/LlamaIndex for RAG yet) so moving parts stay visible.
 - Even when told "just do it," narrate the decision.
 
-Francisco already understands these three — calibrate explanations to this level, don't re-explain from zero:
-
-- **Elo** — self-correcting strength rating; updates scale with how *surprising* the result is.
-- **Walk-forward / leakage** — predict from past-only ratings, record, *then* update, in strict time order (at prediction time you only have the past). Never a random split for time-series.
-- **Probability metrics** — grade the probability (Brier, log loss, calibration), not just the side; always compare to a baseline.
-
-> `context.md` is Francisco's personal reference — do not read or edit it. CLAUDE.md is the single source of truth for Claude.
+> `context.md` is a personal reference — do not read or edit it. CLAUDE.md is the single source of truth for Claude.
 
 ## Architecture (big picture)
 
@@ -68,7 +62,7 @@ CSV now → **Supabase** once schema stabilizes (`pgvector` reserved for RAG). `
 
 1. Deployed, documented predictor with a working walk-forward backtest + calibration table, beating Elo and the home baseline.
 2. Grounded LLM briefing layer with a faithfulness eval incl. numeric fact-check. **Core, not stretch.**
-3. A decision log / README Francisco can talk through for an hour.
+3. A decision log / README thorough enough to talk through for an hour.
 4. (Optional) PyTorch DL comparison model (Phase 1.5), scored by the same harness against XGBoost.
 
 ## Code conventions
