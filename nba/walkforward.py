@@ -66,3 +66,34 @@ def walk_forward_by_season(games, X, feature_cols, make_estimator,
     out["pred"] = preds
     scored = out[~np.isnan(preds)].reset_index(drop=True)
     return scored, out
+
+
+def walk_forward_sliding(games, X, feature_cols, make_estimator, window,
+                         refit_every=100, label_col="home_win"):
+    """Trailing-K sliding-window walk-forward refit -- the "limited history" variant.
+
+    Where walk_forward_by_season trains on ALL strictly-prior seasons, this trains each
+    refit on only the `window` (=K) games IMMEDIATELY before the block it predicts, then
+    slides forward `refit_every` games and refits. It answers the "does recent-only history
+    help?" question directly. Leak-free identically: the training slice [b-window, b) is
+    strictly earlier in date order than the predicted block [b, b+refit_every).
+
+    Rows before index `window` have no full trailing window -> unscored (NaN). Returns
+    (scored, full) with the same shape as walk_forward_by_season, so model.py is unchanged.
+    Uses positional .iloc (half-open) throughout -- .loc integer slices are INCLUSIVE and
+    would leak the block's first row into training."""
+    games = games.reset_index(drop=True)
+    X = X.reset_index(drop=True)
+    y = games[label_col].to_numpy()
+    preds = np.full(len(games), np.nan)
+
+    for b in range(window, len(games), refit_every):
+        est = make_estimator()                       # FRESH each refit -> no state leak
+        est.fit(X.iloc[b - window:b][feature_cols], y[b - window:b])  # trailing K, strictly before
+        end = min(b + refit_every, len(games))
+        preds[b:end] = est.predict_proba(X.iloc[b:end][feature_cols])[:, 1]
+
+    out = games.copy()
+    out["pred"] = preds
+    scored = out[~np.isnan(preds)].reset_index(drop=True)
+    return scored, out

@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "nba"))
-from walkforward import walk_forward_by_season  # noqa: E402
+from walkforward import walk_forward_by_season, walk_forward_sliding  # noqa: E402
 
 
 class SpyEstimator:
@@ -87,8 +87,32 @@ def test_first_season_unscored():
     assert np.allclose(scored["pred"].to_numpy(), 0.5), scored["pred"].tolist()
 
 
+def test_sliding_trailing_window():
+    """SLIDING: each refit trains on exactly the `window` rows immediately before its
+    block (all strictly earlier), predictions fill from `window` onward in refit_every
+    blocks, and the first `window` rows are unscored. 10 games, window=3, refit_every=2
+    -> blocks start at b=3,5,7,9 with trailing-3 training windows."""
+    games = pd.DataFrame({"game_id": list(range(10)),
+                          "season": [0] * 10, "home_win": [0, 1] * 5})
+    X = games[["game_id"]].copy()
+    log = []
+    scored, full = walk_forward_sliding(games, X, ["game_id"],
+                                        lambda: SpyEstimator(log),
+                                        window=3, refit_every=2)
+    # trailing-3 window before each block start b in {3,5,7,9}
+    assert log == [[0, 1, 2], [2, 3, 4], [4, 5, 6], [6, 7, 8]], log
+    for train_ids, b in zip(log, [3, 5, 7, 9]):
+        assert all(i < b for i in train_ids), (b, train_ids)   # strictly before the block
+    # first `window`=3 rows have no full trailing window -> unscored
+    assert full["pred"].iloc[:3].isna().all(), "first window rows must be NaN"
+    assert full["pred"].iloc[3:].notna().all(), "everything after the window is scored"
+    assert set(scored["game_id"]) == set(range(3, 10)), scored["game_id"].tolist()
+    assert np.allclose(scored["pred"].to_numpy(), 0.5), scored["pred"].tolist()
+
+
 if __name__ == "__main__":
     test_no_future_leak()
     test_fresh_refit_once_per_scored_season()
     test_first_season_unscored()
+    test_sliding_trailing_window()
     print("All walk-forward tests passed.")
